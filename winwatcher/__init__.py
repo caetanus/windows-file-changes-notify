@@ -111,7 +111,6 @@ class WaitForMultipleObjectsPool(object):
 
         for count, lphandles in self._lphandles:
             thread = threading.Thread(target=self._WaitForMultipleObjectsWorker, args=(count, lphandles, timeout))
-            print >>sys.stderr, "starting thread with args: %s %s %s" % (count, lphandles[:], timeout)
             sys.stderr.flush()
             thread.start()
         return self._parse_wfmo_result(self._queue.get())
