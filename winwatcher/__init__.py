@@ -91,6 +91,7 @@ class WaitForMultipleObjectsPool(object):
 
     def _update_lphandles(self):
         handles = self._handles[:]
+        self._lphandles = []
         while handles:
             handle_slice = handles[:MAX_OBJECTS]
             handles = handles[MAX_OBJECTS:]
@@ -113,6 +114,13 @@ class WaitForMultipleObjectsPool(object):
             thread = threading.Thread(target=self._WaitForMultipleObjectsWorker, args=(count, lphandles, timeout))
             sys.stderr.flush()
             thread.start()
+
+        if not self._lphandles and timeout:
+            raise TimeoutError
+
+        elif not self._lphandles:
+            raise WaitForMultipleObjectsError, "can't pool an empty list"
+
         return self._parse_wfmo_result(self._queue.get())
     def _WaitForMultipleObjectsWorker(self, count, lphandles, timeout):
         wait_all = False
