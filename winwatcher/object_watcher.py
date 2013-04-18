@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 
 from . import (NOTIFY_CONSTANTS, FindNextChangeNotification,
-               FindCloseChangeNotification, FindFirstChangeNotification)
+               FindCloseChangeNotification, FindFirstChangeNotification,
+               DirectoryWatcherError)
+import os
 
 
 
+class FSWatcherError(DirectoryWatcherError):
+    pass
+
+class FSFileWatcherError(DirectoryWatcherError):
+    pass
 
 class WinFolderWatcher(object):
 

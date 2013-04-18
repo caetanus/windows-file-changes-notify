@@ -13,17 +13,20 @@ import tempfile
 import threading
 import shutil
 import time
+import os
 
 class TestWFMOIntegrationTestCase(TestCase):
 
     def setUp(self):
         self.dir_mutex = threading.Lock()
-        with self.dir_mutex:
-            self.directory = tempfile.mkdtemp(prefix="winwatcher_")
+        self.dir_mutex.acquire()
+        self.directory = tempfile.mkdtemp(prefix="winwatcher_")
+        self.dir_mutex.release()
 
     def tearDown(self):
-        with self.dir_mutex:
-            shutil.rmtree(self.directory)
+        self.dir_mutex.acquire()
+        shutil.rmtree(self.directory)
+        self.dir_mutex.release()
 
     def test_wmfo_register_handle_should_add_handle_and_lphandles(self):
         wmfo = WaitForMultipleObjectsPool()
@@ -52,14 +55,17 @@ class TestWFMOIntegrationTestCase(TestCase):
         self.assertEqual(wmfo._lphandles[0][1][:], wmfo._handles)
 
     def test_wmfo_should_return_handlers(self):
-        def create_file_inside_directory(directory):
-            time.sleep(0.01)
-            with self.dir_mutex:
-                open(directory + "\\foo.bar", "wb").close()
+        def create_file_inside_directory(foo_file):
+            self.dir_mutex.acquire()
+            foo_file.write("fooo")
+            os.fsync(foo_file)
+            foo_file.close()
+            self.dir_mutex.release()
 
         handle = FindFirstChangeNotification(self.directory)
+        foo_file = open(self.directory + "\\foo.bar", "wb")
         thread = threading.Thread(target=create_file_inside_directory,
-                                  args=(self.directory,))
+                                  args=(foo_file,))
         thread.start()
         wmfo = WaitForMultipleObjectsPool()
         wmfo.register_handle(handle)
@@ -67,34 +73,40 @@ class TestWFMOIntegrationTestCase(TestCase):
                          wmfo.pool(1))
 
     def test_wmfo_should_raise_TimeoutError_when_a_handle_is_removed_and_no_handle_is_left(self):
-        def create_file_inside_directory(directory):
-            time.sleep(0.01)
-            with self.dir_mutex:
-                open(directory + "\\foo.bar", "wb").close()
+        def create_file_inside_directory(foo_file):
+            self.dir_mutex.acquire()
+            foo_file.write("fooo")
+            os.fsync(foo_file)
+            foo_file.close()
+            self.dir_mutex.release()
 
+        foo_file = open(self.directory + "\\foo.bar", "wb")
         handle = FindFirstChangeNotification(self.directory)
         thread = threading.Thread(target=create_file_inside_directory,
-                                  args=(self.directory,))
+                                  args=(foo_file,))
 
         wmfo = WaitForMultipleObjectsPool()
         wmfo.register_handle(handle)
         wmfo.unregister_handle(handle)
         thread.start()
         self.assertRaises(TimeoutError,
-                         wmfo.pool, (0.5))
+                         wmfo.pool, (1))
 
 
     def test_wmfo_should_raise_TimeoutError_when_a_handle_is_removed_and_there_is_other_handles(self):
         def create_file_inside_directory(directory):
-            time.sleep(0.01)
-            with self.dir_mutex:
-                open(directory + "\\foo.bar", "wb").close()
+            self.dir_mutex.acquire()
+            foo_file.write("fooo")
+            os.fsync(foo_file)
+            foo_file.close()
+            self.dir_mutex.release()
 
+        foo_file = open(self.directory + "\\foo.bar", "wb")
         handle = FindFirstChangeNotification(self.directory)
         other_dir = tempfile.mkdtemp()
         handle2 = FindFirstChangeNotification(other_dir)
         thread = threading.Thread(target=create_file_inside_directory,
-                                  args=(self.directory,))
+                                  args=(foo_file,))
 
         wmfo = WaitForMultipleObjectsPool()
         wmfo.register_handle(handle)
