@@ -2,9 +2,10 @@
 
 
 import sys
-from ctypes import windll, c_wchar_p, c_long, c_uint, c_void_p
-from ctypes.wintypes import (DWORD, HANDLE, BOOL, LPWSTR, GetLastError,
-                             FormatError)
+from ctypes import (windll, c_wchar_p, c_long, c_int, c_uint, c_void_p,
+                    c_int32,  Structure, wstring_at, c_wchar_p, POINTER)
+from ctypes.wintypes import (DWORD, HANDLE, BOOL, LPWSTR, LPVOID, GetLastError,
+                             FormatError, WCHAR)
 from Queue import Queue, Empty
 import threading
 
@@ -19,11 +20,14 @@ FILE_NOTIFY_CHANGE_SIZE = 0x00000008
 FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010
 FILE_NOTIFY_CHANGE_SECURITY = 0x00000100
 
+OVERLAPPED = c_void_p
+
 MAX_OBJECTS = 0x7F
 WAIT_OBJECT_0 = 0x00000000
 WAIT_OBJECT_ABANDONED_0 = 0x00000080
 WAIT_TIMEOUT = 0x00000102L
-WAIT_FAILED = ~0
+WAIT_FAILED = ~0 # -1
+WAIT_INFINITE = ~0 # -1
 
 
 NOTIFY_CONSTANTS = {'ChangeFileName': FILE_NOTIFY_CHANGE_FILE_NAME,
@@ -54,6 +58,63 @@ FindCloseChangeNotification.argtypes = [HANDLE]
 
 _WaitForMultipleObjects = kernel32.WaitForMultipleObjects
 _WaitForMultipleObjects.argtypes = [DWORD, c_void_p, BOOL, DWORD]
+
+ReadDirectoryChangesW = kernel32.ReadDirectoryChangesW
+FILE_ACTION_ADDED = 0x1
+FILE_ACTION_REMOVED = 0x2
+FILE_ACTION_MODIFIED = 0x3
+FILE_ACTION_RENAMED_OLD_NAME = 0x4
+FILE_ACTION_RENAMED_NEW_NAME = 0x5
+
+class FILE_NOTIFY_INFORMATION(Structure):
+    _fields_ = [
+                ('NextEntryOffset', DWORD),
+                ('Action', DWORD),
+                ('FileNameLength', DWORD),
+                ('FileName', c_wchar_p)
+               ]
+LPFILE_NOTIFY_INFORMATION = POINTER(FILE_NOTIFY_INFORMATION)
+
+class OVERLAPPED(Structure):
+    _fields_ = [('Internal', LPVOID),
+                ('InternalHigh', LPVOID),
+                ('Offset', DWORD),
+                ('OffsetHigh', DWORD),
+                ('Pointer', LPVOID),
+                ('hEvent', HANDLE),
+               ]
+LPOVERLAPPED = POINTER(OVERLAPPED)
+#ReadDirectoryChangesW.argtypes = [HANDLE, LPFILE_NOTIFY_INFORMATION,
+#                                  DWORD, BOOL, POINTER(DWORD),
+#                                  c_void_p, c_void_p]
+
+try:
+    ReadDirectoryChangesW = kernel32.ReadDirectoryChangesW
+except AttributeError:
+    raise ImportError("ReadDirectoryChangesW is not available")
+ReadDirectoryChangesW.restype = BOOL
+ReadDirectoryChangesW.argtypes = (
+    HANDLE, # hDirectory
+    LPVOID, # lpBuffer
+    DWORD, # nBufferLength
+    BOOL, # bWatchSubtree
+    DWORD, # dwNotifyFilter
+    POINTER(DWORD), # lpBytesReturned
+    LPOVERLAPPED,# lpOverlapped
+    LPVOID #FileIOCompletionRoutine # lpCompletionRoutine
+)
+
+CreateFileW = kernel32.CreateFileW
+CreateFileW.restype = HANDLE
+CreateFileW.argtypes = (
+    LPCWSTR, # lpFileName
+    DWORD, # dwDesiredAccess
+    DWORD, # dwShareMode
+    LPVOID, # lpSecurityAttributes
+    DWORD, # dwCreationDisposition
+    DWORD, # dwFlagsAndAttributes
+    HANDLE # hTemplateFile
+)
 
 class DirectoryWatcherError(WindowsError):
     pass

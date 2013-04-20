@@ -64,9 +64,7 @@ class TestWFMOIntegrationTestCase(TestCase):
 
         handle = FindFirstChangeNotification(self.directory)
         foo_file = open(self.directory + "\\foo.bar", "wb")
-        thread = threading.Thread(target=create_file_inside_directory,
-                                  args=(foo_file,))
-        thread.start()
+        create_file_inside_directory(foo_file)
         wmfo = WaitForMultipleObjectsPool()
         wmfo.register_handle(handle)
         self.assertEqual(handle,
@@ -82,13 +80,11 @@ class TestWFMOIntegrationTestCase(TestCase):
 
         foo_file = open(self.directory + "\\foo.bar", "wb")
         handle = FindFirstChangeNotification(self.directory)
-        thread = threading.Thread(target=create_file_inside_directory,
-                                  args=(foo_file,))
+        create_file_inside_directory(foo_file)
 
         wmfo = WaitForMultipleObjectsPool()
         wmfo.register_handle(handle)
         wmfo.unregister_handle(handle)
-        thread.start()
         self.assertRaises(TimeoutError,
                          wmfo.pool, (1))
 
@@ -105,13 +101,10 @@ class TestWFMOIntegrationTestCase(TestCase):
         handle = FindFirstChangeNotification(self.directory)
         other_dir = tempfile.mkdtemp()
         handle2 = FindFirstChangeNotification(other_dir)
-        thread = threading.Thread(target=create_file_inside_directory,
-                                  args=(foo_file,))
-
+        create_file_inside_directory(foo_file)
         wmfo = WaitForMultipleObjectsPool()
         wmfo.register_handle(handle)
         wmfo.unregister_handle(handle)
-        thread.start()
         self.assertRaises(TimeoutError,
                          wmfo.pool, (0.5))
         shutil.rmtree(other_dir)

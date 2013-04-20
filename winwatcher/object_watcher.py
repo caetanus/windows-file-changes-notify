@@ -2,7 +2,7 @@
 
 from . import (NOTIFY_CONSTANTS, FindNextChangeNotification,
                FindCloseChangeNotification, FindFirstChangeNotification,
-               DirectoryWatcherError)
+               DirectoryWatcherError, WaitForMultipleObjectsPool)
 import os
 
 
@@ -11,6 +11,9 @@ class FSWatcherError(DirectoryWatcherError):
     pass
 
 class FSFileWatcherError(DirectoryWatcherError):
+    pass
+
+class InvalidWatchType(FSFileWatcherError):
     pass
 
 class WinFolderWatcher(object):
@@ -32,6 +35,8 @@ class WinFolderWatcher(object):
 class FolderTracker(object):
     pass
 
+def get_stat(path):
+    return os.stat(path)
 
 class _WinFSObjectWatcher(object):
     def __init__(self, path):
@@ -40,14 +45,20 @@ class _WinFSObjectWatcher(object):
         self._children = []
         self._parent = None
         self.is_dir = os.path.isdir(path)
-        self._stat = os.stat(path)
+        self._stat = get_stat(path)
         self.path = path
         self._handles = {}
         self._event_type_handles = {}
 
+    def _get_event_type_by_handle(self, handle):
+        return self._handles[handle]
+
     def _watch_by_event_type(self, event_type):
-        handle = FindFirstChangeNotification(self.path,
-                                             NOTIFY_CONSTANTS[event_type])
+        try:
+            notify_flag = NOTIFY_CONSTANTS[event_type]
+        except KeyError:
+            raise InvalidWatchType, "invalid event type"
+        handle = FindFirstChangeNotification(self.path, notify_flag)
         self._handles[handle] = event_type
         self._event_type_handles[event_type] = handle
 
@@ -101,3 +112,26 @@ class _WinFileObjectWatcher(_WinFSObjectWatcher):
         map(self._watch_by_event_type, ["ChangeFileName", "ChangeSize", "LastWrite"])
 
 
+class FSObjectWatcherWMFOPool(WaitForMultipleObjectsPool):
+
+    def __init__(self):
+        self._handle_fs_object_watcher = {}
+        self._fs_object_watcher_handle = {}
+        WaitForMultipleObjectsPool.__init__(self)
+
+    def register(self, object_watcher):
+        handles = object_watcher._handles.keys()
+        self._fs_object_watcher_handle[object_watcher] = handles
+        for  handle in handles:
+            WaitForMultipleObjectsPool.register_handle(self, handle)
+            self._handle_fs_object_watcher[handle] = object_watcher
+
+    def unregister(self, object_watcher):
+        for handle in self._fs_object_watcher_handle[object_watcher]:
+            WaitForMultipleObjectsPool.unregister_handle(self, handle)
+            del self._handle_fs_object_watcher[handle]
+
+    def pool(self, timeout=-1):
+        ret_val = WaitForMultipleObjectsPool.pool(self, timeout)
+        obj = self._handle_fs_object_watcher[ret_val]
+        return (obj, obj._get_event_type_by_handle(ret_val))

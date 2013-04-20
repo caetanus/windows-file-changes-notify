@@ -13,4 +13,4 @@ from .win32_objects import (FindCloseChangeNotification,
 
 from .object_watcher import (_WinFSObjectWatcher, WinFolderWatcher,
                              _WinFileObjectWatcher, FSWatcherError,
-                             DirectoryWatcherError)
+                             DirectoryWatcherError, FSObjectWatcherWMFOPool)
