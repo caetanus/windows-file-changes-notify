@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 
 import winwatcher
-from unittest import TestCase
+from unittest import TestCase, skip
 import mock
 
-class WinFSObjectTreeWatcherTestCase(TestCase):
+@skip
+class _WinFSObjectTreeWatcherTestCase(TestCase):
     def setUp(self):
         pass
 

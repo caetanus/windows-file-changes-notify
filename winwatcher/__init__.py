@@ -9,8 +9,8 @@ from .win32_objects import (FindCloseChangeNotification,
                             WAIT_OBJECT_0,
                             WAIT_OBJECT_ABANDONED_0,
                             WAIT_TIMEOUT,
-                            WAIT_FAILED)
+                            WAIT_FAILED,
+                            CreateFileDirectory)
 
-from .object_watcher import (_WinFSObjectWatcher, WinFolderWatcher,
-                             _WinFileObjectWatcher, FSWatcherError,
-                             DirectoryWatcherError, FSObjectWatcherWMFOPool)
+from .object_watcher import (DirectoryWatcherError, FSObjectWatcherWMFOPool,
+                             WinDirectoryWatcher)

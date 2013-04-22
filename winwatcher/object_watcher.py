@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 
-from . import (NOTIFY_CONSTANTS, FindNextChangeNotification,
+from .win32_objects import (NOTIFY_CONSTANTS, FindNextChangeNotification,
                FindCloseChangeNotification, FindFirstChangeNotification,
-               DirectoryWatcherError, WaitForMultipleObjectsPool)
+               DirectoryWatcherError, WaitForMultipleObjectsPool,
+               CreateFileDirectory, ReadDirectoryChangesW, OVERLAPPED,
+               ACTION_DICT, FILE_NOTIFY_INFORMATION_STRUCT, CloseHandle)
+from ctypes import byref, create_string_buffer
+import struct
 import os
 
 
@@ -16,51 +20,55 @@ class FSFileWatcherError(DirectoryWatcherError):
 class InvalidWatchType(FSFileWatcherError):
     pass
 
-class WinFolderWatcher(object):
-
-    def __init__(self):
-        self._handles = {}
-        self._event_type_handles = {}
-
-    def watch(self, path, recursive):
-        self._path = path
-        ignore_notifies = ['NotifyChangeSecurity']
-        for notify_type, notify_const in NOTIFY_CONSTANTS.items():
-            if notify_type in ignore_notifies:
-                continue
-            handle = FindFirstChangeNotification(path, recursive, notify_const)
-            self._handles[handle] = notify_type
-            self._event_type_handles[notify_type] = handle
-
-class FolderTracker(object):
-    pass
-
 def get_stat(path):
     return os.stat(path)
 
-class _WinFSObjectWatcher(object):
-    def __init__(self, path):
+default_notification_list = ('ChangeSize',
+                             'LastWrite',
+                             'ChangeSecurity',
+                             'ChangeAttributes',
+                             'ChangeDirName',
+                             'ChangeFileName')
+
+class WinDirectoryWatcher(object):
+    def __init__(self, path, recursive=True,
+                 notify_atributes_list=default_notification_list):
+        if type(path) is not unicode:
+            try:
+                path = unicode(path)
+            except:
+                raise IOError, "path should be unicode or convertable."
         if not os.path.exists(path):
             raise FSWatcherError, "path doesn't exist"
-        self._children = []
-        self._parent = None
-        self.is_dir = os.path.isdir(path)
+        try:
+            self._flags = reduce(lambda a, b: a | b,
+                                (NOTIFY_CONSTANTS[i]
+                                 for i in notify_atributes_list))
+        except KeyError:
+            raise DirectoryWatcherError, "invalid notify_attributes_list"
+
+        self._watching = False
+        self.recursive = True
         self._stat = get_stat(path)
         self.path = path
-        self._handles = {}
-        self._event_type_handles = {}
 
-    def _get_event_type_by_handle(self, handle):
-        return self._handles[handle]
 
-    def _watch_by_event_type(self, event_type):
-        try:
-            notify_flag = NOTIFY_CONSTANTS[event_type]
-        except KeyError:
-            raise InvalidWatchType, "invalid event type"
-        handle = FindFirstChangeNotification(self.path, notify_flag)
-        self._handles[handle] = event_type
-        self._event_type_handles[event_type] = handle
+    def _async_watch_directory(self):
+        overlapped = self._overlapped
+        overlapped.Internal = 0
+        overlapped.InternalHigh = 0
+        overlapped.Offset = 0
+        overlapped.OffsetHigh = 0
+        overlapped.Pointer = 0
+        overlapped.hEvent = 0
+        ReadDirectoryChangesW(self._file_handle, byref(self._result),
+                              len(self._result), self.recursive,
+                              self._flags, None, overlapped, None)
+
+
+    def _watch(self):
+        self._handle = FindFirstChangeNotification(self.path, self._flags,
+                                                  self.recursive)
 
     def add_child(self, obj):
         if not isinstance(obj, _WinFSObjectWatcher):
@@ -70,46 +78,58 @@ class _WinFSObjectWatcher(object):
         self._children.append(obj)
         obj._parent = self
 
-
     def start_watching(self):
-        self._watch_by_event_type('ChangeAttributes')
+        self._watching = True
+        self._watch()
+        self._file_handle = CreateFileDirectory(self.path)
+        self._overlapped = OVERLAPPED()
+        self._result = create_string_buffer(1024)
+        self._async_watch_directory()
 
-    def unwatch_ret_handlers(self):
-        handles = []
-        for handle in self._handles.keys():
-            out.append(handle)
-            FindCloseChangeNotification(handle)
-            event_type = self._handles[handle]
-            del self._handles[handle]
-            del self._event_type_handles[event_type]
-        return handles
+    def stop_watching(self):
+        if self._file_handle:
+            closed = CloseHandle(self._file_handle)
+            self._file_handle = None
+        if self._handle:
+            closed = CloseHandle(self._handle)
+            self._handle = None
+        if hasattr(self, '_wfmo'):
+            del self._wmfo
+        self._overlapped = None
+        self._result = None
+        self._watching = False
 
-    def find_child_by_handle(self, handle):
-        if handle in self._handles:
-            return self
-        else:
-            for obj in map(lambda child: child.find_child_by_handle(handle),
-                           self._children):
-                if obj:
-                    return obj
+    def _parse_read_directory_changes_result(self, location=0):
+        fmt = FILE_NOTIFY_INFORMATION_STRUCT
+        fmt_size = struct.calcsize(FILE_NOTIFY_INFORMATION_STRUCT)
+        next_entry = 1
+        pos = location
+        while next_entry:
+            next_entry, action, namelen = struct.unpack_from(fmt, self._result[pos:])
+            str_pos = location + fmt_size
+            str_len = namelen + str_pos
+            name = self._result[str_pos:str_len].decode('utf-16')
+            yield (ACTION_DICT[action], name)
+            pos += next_entry
 
-    def get_root_object(self):
-        if self._parent is None:
-            return self
-        else:
-            return self._parent.get_root_object()
+    def _get_results(self):
+        for action, name in self._parse_read_directory_changes_result():
+            import ipdb; ipdb.set_trace()
+            print action, name.encode('utf-8')
 
+    def _auto_fetch_events(self):
+        self._wmfo = FSObjectWatcherWMFOPool()
+        self._wmfo.register(self)
 
+    def pool(self):
+        if not self._watching:
+            raise DirectoryWatcherError, "Not Watching"
 
-class _WinFileObjectWatcher(_WinFSObjectWatcher):
-    def __init__(self, path):
-        super(_WinFileObjectWatcher, self).__init__(path)
-        if self.is_dir:
-            raise FSFileWatcherError, "the path %s looks like a directory." % path
+        if not hasattr(self, '_wmfo'):
+            self._auto_fetch_events()
 
-    def start_watching(self):
-        super(_WinFSObjectWatcher, self).start_watching()
-        map(self._watch_by_event_type, ["ChangeFileName", "ChangeSize", "LastWrite"])
+        self._wmfo.pool()
+        return [i for i in self._parse_read_directory_changes_result()]
 
 
 class FSObjectWatcherWMFOPool(WaitForMultipleObjectsPool):
@@ -120,11 +140,9 @@ class FSObjectWatcherWMFOPool(WaitForMultipleObjectsPool):
         WaitForMultipleObjectsPool.__init__(self)
 
     def register(self, object_watcher):
-        handles = object_watcher._handles.keys()
-        self._fs_object_watcher_handle[object_watcher] = handles
-        for  handle in handles:
-            WaitForMultipleObjectsPool.register_handle(self, handle)
-            self._handle_fs_object_watcher[handle] = object_watcher
+        handle = object_watcher._handle
+        WaitForMultipleObjectsPool.register_handle(self, handle)
+        self._handle_fs_object_watcher[handle] = object_watcher
 
     def unregister(self, object_watcher):
         for handle in self._fs_object_watcher_handle[object_watcher]:
@@ -134,4 +152,4 @@ class FSObjectWatcherWMFOPool(WaitForMultipleObjectsPool):
     def pool(self, timeout=-1):
         ret_val = WaitForMultipleObjectsPool.pool(self, timeout)
         obj = self._handle_fs_object_watcher[ret_val]
-        return (obj, obj._get_event_type_by_handle(ret_val))
+        return obj

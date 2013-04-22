@@ -2,10 +2,11 @@
 
 
 import sys
+import struct
 from ctypes import (windll, c_wchar_p, c_long, c_int, c_uint, c_void_p,
-                    c_int32,  Structure, wstring_at, c_wchar_p, POINTER)
+                    c_int32,  Structure, wstring_at, c_wchar, c_wchar_p, POINTER)
 from ctypes.wintypes import (DWORD, HANDLE, BOOL, LPWSTR, LPVOID, GetLastError,
-                             FormatError, WCHAR)
+                             FormatError, WCHAR, LPCWSTR)
 from Queue import Queue, Empty
 import threading
 
@@ -44,6 +45,7 @@ FILE_NOTIFY_CHANGE_ALL_BUT_SECURITY = (FILE_NOTIFY_CHANGE_FILE_NAME|
                                        FILE_NOTIFY_CHANGE_LAST_WRITE|
                                        FILE_NOTIFY_CHANGE_SIZE)
 
+FILE_NOTIFY_CHANGE_ALL = FILE_NOTIFY_CHANGE_ALL_BUT_SECURITY | FILE_NOTIFY_CHANGE_SECURITY
 
 _FindFirstChangeNotification = kernel32.FindFirstChangeNotificationW
 _FindFirstChangeNotification.argtypes = [LPWSTR, BOOL, DWORD]
@@ -60,20 +62,41 @@ _WaitForMultipleObjects = kernel32.WaitForMultipleObjects
 _WaitForMultipleObjects.argtypes = [DWORD, c_void_p, BOOL, DWORD]
 
 ReadDirectoryChangesW = kernel32.ReadDirectoryChangesW
+
+CloseHandle = kernel32.CloseHandle
+CloseHandle.argtypes = [HANDLE]
+CloseHandle.restype = BOOL
+
 FILE_ACTION_ADDED = 0x1
 FILE_ACTION_REMOVED = 0x2
 FILE_ACTION_MODIFIED = 0x3
 FILE_ACTION_RENAMED_OLD_NAME = 0x4
 FILE_ACTION_RENAMED_NEW_NAME = 0x5
 
+FILE_LIST_DIRECTORY = 0x01
+FILE_SHARE_READ = 0x01
+FILE_SHARE_WRITE = 0x02
+OPEN_EXISTING = 3
+FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+FILE_FLAG_OVERLAPPED = 0x40000000
+
+ACTION_DICT = {
+        FILE_ACTION_ADDED: "Added",
+        FILE_ACTION_REMOVED: "Removed",
+        FILE_ACTION_MODIFIED: "Modified",
+        FILE_ACTION_RENAMED_OLD_NAME: "RenamedOld",
+        FILE_ACTION_RENAMED_NEW_NAME: "RenamedNew"
+    }
+
 class FILE_NOTIFY_INFORMATION(Structure):
     _fields_ = [
                 ('NextEntryOffset', DWORD),
                 ('Action', DWORD),
                 ('FileNameLength', DWORD),
-                ('FileName', c_wchar_p)
+                ('FileName', c_wchar*256)
                ]
-LPFILE_NOTIFY_INFORMATION = POINTER(FILE_NOTIFY_INFORMATION)
+
+FILE_NOTIFY_INFORMATION_STRUCT = "iii"
 
 class OVERLAPPED(Structure):
     _fields_ = [('Internal', LPVOID),
@@ -115,6 +138,26 @@ CreateFileW.argtypes = (
     DWORD, # dwFlagsAndAttributes
     HANDLE # hTemplateFile
 )
+CloseHandle = kernel32.CloseHandle
+CloseHandle.restype = BOOL
+CloseHandle.argtypes = (
+    HANDLE, # hObject
+)
+
+GetOverlappedResult = kernel32.GetOverlappedResult
+GetOverlappedResult.argtypes = (HANDLE, LPOVERLAPPED, POINTER(DWORD),
+                                BOOL)
+
+def CreateFileDirectory(path):
+    if type(path) is not unicode:
+        raise IOError, "Directory path should be unicode."
+    handle = CreateFileW(path, FILE_LIST_DIRECTORY,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE,
+                         None,
+                         OPEN_EXISTING,
+                         FILE_FLAG_BACKUP_SEMANTICS| FILE_FLAG_OVERLAPPED,
+                         None)
+    return handle
 
 class DirectoryWatcherError(WindowsError):
     pass
@@ -180,7 +223,9 @@ class WaitForMultipleObjectsPool(object):
             raise WaitForMultipleObjectsError, "can't pool an empty list"
 
         return self._parse_wfmo_result(self._queue.get())
-    def _WaitForMultipleObjectsWorker(self, count, lphandles, timeout):
+
+
+    def _WaitForMultipleObjectsWorker(self, count, lphandles, timeout):
         wait_all = False
         timeout = int(timeout * 1000)
         self._queue.put(_WaitForMultipleObjects(count, lphandles, wait_all, timeout))
