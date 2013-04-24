@@ -2,7 +2,7 @@
 
 from ctypes import (windll, c_wchar_p, c_long, c_int, c_uint, c_void_p,
                     c_int32,  Structure, wstring_at, c_wchar, c_wchar_p,
-                    POINTER)
+                    POINTER, c_ulong)
 from ctypes.wintypes import (DWORD, HANDLE, BOOL, LPWSTR, LPVOID, GetLastError,
                              FormatError, WCHAR, LPCWSTR)
 from ctypes import byref
@@ -20,7 +20,7 @@ FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010
 FILE_NOTIFY_CHANGE_SECURITY = 0x00000100
 
 
-MAX_OBJECTS = 0x40
+MAX_OBJECTS = 0x3F
 WAIT_OBJECT_0 = 0x00000000
 WAIT_OBJECT_ABANDONED_0 = 0x00000080
 WAIT_TIMEOUT = 0x00000102L
@@ -176,5 +176,13 @@ CloseHandle.argtypes = (
 )
 
 GetOverlappedResult = kernel32.GetOverlappedResult
-GetOverlappedResult.argtypes = (HANDLE, LPOVERLAPPED, POINTER(DWORD),
-                                BOOL)
+GetOverlappedResult.argtypes = (HANDLE, LPOVERLAPPED, POINTER(DWORD), BOOL)
+
+CreateIoCompletionPort = kernel32.CreateIoCompletionPort
+
+CreateIoCompletionPort.argtypes = (HANDLE, HANDLE, POINTER(c_ulong), DWORD)
+CreateIoCompletionPort.restype = HANDLE
+
+GetQueuedCompletionStatus = kernel32.GetQueuedCompletionStatus
+GetQueuedCompletionStatus.argtypes = (HANDLE, POINTER(DWORD), POINTER(c_ulong),
+                                      LPOVERLAPPED, DWORD)

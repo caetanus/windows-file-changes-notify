@@ -1,34 +1,26 @@
 # -*- coding: utf-8 -*-
 
-
+import os
 import sys
 import struct
-from ctypes import (windll, c_wchar_p, c_long, c_int, c_uint, c_void_p,
-                    c_int32,  Structure, wstring_at, c_wchar, c_wchar_p, POINTER)
-from ctypes.wintypes import (DWORD, HANDLE, BOOL, LPWSTR, LPVOID, GetLastError,
-                             FormatError, WCHAR, LPCWSTR)
 from Queue import Queue, Empty
-import threading
+import threading, thread
 
-import os
 
-kernel32 = windll.kernel32
-INVALID_HANDLE_VALUE = ~0
-FILE_NOTIFY_CHANGE_FILE_NAME = 0x00000001
-FILE_NOTIFY_CHANGE_DIR_NAME = 0x00000002
-FILE_NOTIFY_CHANGE_ATTRIBUTES = 0x00000004
-FILE_NOTIFY_CHANGE_SIZE = 0x00000008
-FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010
-FILE_NOTIFY_CHANGE_SECURITY = 0x00000100
+from .win32_defs import *
+from .win32_defs import (_CreateEvent, _FindFirstChangeNotification,
+                         _WaitForMultipleObjects)
 
-OVERLAPPED = c_void_p
 
-MAX_OBJECTS = 0x7F
-WAIT_OBJECT_0 = 0x00000000
-WAIT_OBJECT_ABANDONED_0 = 0x00000080
-WAIT_TIMEOUT = 0x00000102L
-WAIT_FAILED = ~0 # -1
-WAIT_INFINITE = ~0 # -1
+class DirectoryWatcherError(WindowsError):
+    pass
+
+class WaitForMultipleObjectsError(WindowsError):
+    pass
+
+class TimeoutError(WaitForMultipleObjectsError):
+    pass
+
 
 
 NOTIFY_CONSTANTS = {'ChangeFileName': FILE_NOTIFY_CHANGE_FILE_NAME,
@@ -39,46 +31,6 @@ NOTIFY_CONSTANTS = {'ChangeFileName': FILE_NOTIFY_CHANGE_FILE_NAME,
                     'ChangeSecurity' : FILE_NOTIFY_CHANGE_SECURITY
                    }
 
-FILE_NOTIFY_CHANGE_ALL_BUT_SECURITY = (FILE_NOTIFY_CHANGE_FILE_NAME|
-                                       FILE_NOTIFY_CHANGE_ATTRIBUTES|
-                                       FILE_NOTIFY_CHANGE_DIR_NAME|
-                                       FILE_NOTIFY_CHANGE_LAST_WRITE|
-                                       FILE_NOTIFY_CHANGE_SIZE)
-
-FILE_NOTIFY_CHANGE_ALL = FILE_NOTIFY_CHANGE_ALL_BUT_SECURITY | FILE_NOTIFY_CHANGE_SECURITY
-
-_FindFirstChangeNotification = kernel32.FindFirstChangeNotificationW
-_FindFirstChangeNotification.argtypes = [LPWSTR, BOOL, DWORD]
-
-
-
-FindNextChangeNotification = kernel32.FindNextChangeNotification
-FindNextChangeNotification.argtypes = [HANDLE]
-
-FindCloseChangeNotification = kernel32.FindCloseChangeNotification
-FindCloseChangeNotification.argtypes = [HANDLE]
-
-_WaitForMultipleObjects = kernel32.WaitForMultipleObjects
-_WaitForMultipleObjects.argtypes = [DWORD, c_void_p, BOOL, DWORD]
-
-ReadDirectoryChangesW = kernel32.ReadDirectoryChangesW
-
-CloseHandle = kernel32.CloseHandle
-CloseHandle.argtypes = [HANDLE]
-CloseHandle.restype = BOOL
-
-FILE_ACTION_ADDED = 0x1
-FILE_ACTION_REMOVED = 0x2
-FILE_ACTION_MODIFIED = 0x3
-FILE_ACTION_RENAMED_OLD_NAME = 0x4
-FILE_ACTION_RENAMED_NEW_NAME = 0x5
-
-FILE_LIST_DIRECTORY = 0x01
-FILE_SHARE_READ = 0x01
-FILE_SHARE_WRITE = 0x02
-OPEN_EXISTING = 3
-FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
-FILE_FLAG_OVERLAPPED = 0x40000000
 
 ACTION_DICT = {
         FILE_ACTION_ADDED: "Added",
@@ -88,65 +40,14 @@ ACTION_DICT = {
         FILE_ACTION_RENAMED_NEW_NAME: "RenamedNew"
     }
 
-class FILE_NOTIFY_INFORMATION(Structure):
-    _fields_ = [
-                ('NextEntryOffset', DWORD),
-                ('Action', DWORD),
-                ('FileNameLength', DWORD),
-                ('FileName', c_wchar*256)
-               ]
+def CreateEvent():
+    return _CreateEvent(None, False, False, None)
 
-FILE_NOTIFY_INFORMATION_STRUCT = "iii"
-
-class OVERLAPPED(Structure):
-    _fields_ = [('Internal', LPVOID),
-                ('InternalHigh', LPVOID),
-                ('Offset', DWORD),
-                ('OffsetHigh', DWORD),
-                ('Pointer', LPVOID),
-                ('hEvent', HANDLE),
-               ]
-LPOVERLAPPED = POINTER(OVERLAPPED)
-#ReadDirectoryChangesW.argtypes = [HANDLE, LPFILE_NOTIFY_INFORMATION,
-#                                  DWORD, BOOL, POINTER(DWORD),
-#                                  c_void_p, c_void_p]
-
-try:
-    ReadDirectoryChangesW = kernel32.ReadDirectoryChangesW
-except AttributeError:
-    raise ImportError("ReadDirectoryChangesW is not available")
-ReadDirectoryChangesW.restype = BOOL
-ReadDirectoryChangesW.argtypes = (
-    HANDLE, # hDirectory
-    LPVOID, # lpBuffer
-    DWORD, # nBufferLength
-    BOOL, # bWatchSubtree
-    DWORD, # dwNotifyFilter
-    POINTER(DWORD), # lpBytesReturned
-    LPOVERLAPPED,# lpOverlapped
-    LPVOID #FileIOCompletionRoutine # lpCompletionRoutine
-)
-
-CreateFileW = kernel32.CreateFileW
-CreateFileW.restype = HANDLE
-CreateFileW.argtypes = (
-    LPCWSTR, # lpFileName
-    DWORD, # dwDesiredAccess
-    DWORD, # dwShareMode
-    LPVOID, # lpSecurityAttributes
-    DWORD, # dwCreationDisposition
-    DWORD, # dwFlagsAndAttributes
-    HANDLE # hTemplateFile
-)
-CloseHandle = kernel32.CloseHandle
-CloseHandle.restype = BOOL
-CloseHandle.argtypes = (
-    HANDLE, # hObject
-)
-
-GetOverlappedResult = kernel32.GetOverlappedResult
-GetOverlappedResult.argtypes = (HANDLE, LPOVERLAPPED, POINTER(DWORD),
-                                BOOL)
+def AccessThreadSynchronize(thread_id):
+    handle = OpenThread(THREAD_ACCESS_SYNCHRONIZE, False, thread_id)
+    if not handle:
+        raise WindowsError, "Cannot open thread to synchronization."
+    CloseHandle(handle)
 
 def CreateFileDirectory(path):
     if type(path) is not unicode:
@@ -159,23 +60,48 @@ def CreateFileDirectory(path):
                          None)
     return handle
 
-class DirectoryWatcherError(WindowsError):
+class IoCompletionPortError(WindowsError):
     pass
 
-class WaitForMultipleObjectsError(WindowsError):
-    pass
+class IoCompletionPort(object):
+    def __init__(self):
+        self._fsobjects = {}
+        self._iocp_key = CreateIoCompletionPort(INVALID_HANDLE_VALUE,
+                                                None, None, 0)
+        if self._iocp_key is None:
+            raise IoCompletionPortError, ("cannot create io "
+                                          "completion port in this system")
 
-class TimeoutError(WaitForMultipleObjectsError):
-    pass
+    def attach_fsobject(self, fsobject):
+        if fsobject in self._fsobjects:
+            return
+        completion_key = c_ulong()
 
-def FindFirstChangeNotification(directory,
-                                flags=FILE_NOTIFY_CHANGE_ALL_BUT_SECURITY,
-                                recursive=False):
+        self._fsobjects[fsobject] = completion_key
+        CreateIoCompletionPort(fsobject._handle, self._iocp_key,
+                               byref(completion_key), 0)
 
-    handle = _FindFirstChangeNotification(directory, recursive, flags)
-    if handle == INVALID_HANDLE_VALUE:
-        raise DirectoryWatcherError
-    return handle
+    def fsobject_get_status(self, fsobject):
+        if not fsobject in self._fsobjects:
+            raise IoCompletionPortError, ("object is not attached to "
+                                          "io completion port")
+        bytes_to_read = DWORD()
+        completion_key = self._fsobjects[fsobject]
+        over = OVERLAPPED()
+
+        res = GetQueuedCompletionStatus(self._iocp_key, byref(bytes_to_read),
+                                        byref(completion_key),
+                                        byref(over), 0)
+        if not res:
+            raise IoCompletionPortError, FormatError(GetLastError())
+        return bytes_to_read.value
+
+    def destroy(self):
+        CloseHandle(self._iocp_key)
+
+
+
+FILE_NOTIFY_INFORMATION_STRUCT = "iii"
 
 
 class WaitForMultipleObjectsPool(object):
@@ -184,6 +110,7 @@ class WaitForMultipleObjectsPool(object):
         self._mutex = threading.Lock()
         self._handles = []
         self._lphandles = []
+        self._threads = []
 
     def register_handle(self, handle):
         self._handles.append(handle)
@@ -196,27 +123,42 @@ class WaitForMultipleObjectsPool(object):
         while handles:
             handle_slice = handles[:MAX_OBJECTS]
             handles = handles[MAX_OBJECTS:]
-            lphandles = (HANDLE * len(handle_slice))(*handle_slice)
-            self._lphandles.append((len(handle_slice), lphandles))
+            lphandles = handle_slice
+            self._lphandles.append(lphandles)
 
     def unregister_handle(self, handle):
         self._handles.remove(handle)
         with self._mutex:
             self._update_lphandles()
 
-    def pool(self, timeout=None):
+    def __start_workers(self, timeout):
+
+        for index, handles in enumerate(self._lphandles):
+            event = CreateEvent()
+
+            count = len(handles) + 1
+            lphandles = [event] + handles
+            thread = threading.Thread(name='WFMO-Worker-%d' % index,
+                                      target=self._WaitForMultipleObjectsWorker,
+                                      args=(index, lphandles, timeout))
+            self._threads.append((thread, event))
+            thread.start()
+
+
+    def pool(self, timeout=-1):
+
         try:
             handle_id = self._queue.get_nowait()
             return self._parse_wfmo_result(handle_id)
         except Empty:
             pass
 
-        for count, lphandles in self._lphandles:
-            thread = threading.Thread(target=self._WaitForMultipleObjectsWorker, args=(count, lphandles, timeout))
-            sys.stderr.flush()
-            thread.start()
+        self._cancel_all_threads()
 
-        if not self._lphandles and timeout:
+        if len(self._lphandles) > 0:
+            self.__start_workers(timeout)
+
+        elif not self._lphandles and timeout > 0:
             raise TimeoutError
 
         elif not self._lphandles:
@@ -224,22 +166,64 @@ class WaitForMultipleObjectsPool(object):
 
         return self._parse_wfmo_result(self._queue.get())
 
+    def _cancel_all_threads(self):
+        for thread, event in self._threads:
+            SetEvent(event)
+            try:
+                thread.join()
+            except RuntimeError:
+                pass
+            CloseHandle(event)
+        self._threads = []
 
-    def _WaitForMultipleObjectsWorker(self, count, lphandles, timeout):
+    def _WaitForMultipleObjectsWorker(self, index, lphandles,
+                                      timeout=-1):
+
+        #NOTE: we can't put the WaitForMultipleEvents on a while just waiting
+        #      for next event, because sometimes the user needs to signal
+        #      the event as seen. so, it will fail.
         wait_all = False
-        timeout = int(timeout * 1000)
-        self._queue.put(_WaitForMultipleObjects(count, lphandles, wait_all, timeout))
+        with self._mutex:
+            lphandles = (HANDLE * len(lphandles))(*lphandles)
+
+        if timeout > 0:
+            timeout = int(timeout * 1000)
+
+        result = _WaitForMultipleObjects(len(lphandles),
+                                         lphandles, False,
+                                         timeout)
+
+        if result == WAIT_FAILED:
+            self._queue.put(index, GetLastError(), FormatError(GetLastError()))
+
+        elif result in (WAIT_OBJECT_ABANDONED_0, WAIT_OBJECT_0):
+            #used when we got the first event.
+            #we don't need the first event because it is used to cancel
+            return
+
+        elif result == WAIT_TIMEOUT:
+            self._queue.put((index, TimeoutError, "WFMO timeout expired"))
+
+        elif result > WAIT_OBJECT_ABANDONED_0:
+            obj = (WAIT_OBJECT_ABANDONED_0 - result - 1) + (MAX_OBJECTS * index)
+            self._queue.put(obj)
+
+        else:
+            obj = result - 1 + (MAX_OBJECTS * index)
+            self._queue.put(obj)
 
     def _parse_wfmo_result(self, ret_value):
-        count = len(self._handles)
-        if ret_value == WAIT_FAILED:
-            raise WaitForMultipleObjectsError, "Failed %s" % FormatError(GetLastError())
-
-        if (WAIT_OBJECT_0 - ret_value) > count:
-            if ret_value == 0x80:
-                raise WaitForMultipleObjectsError, "Wait Abandoned"
-            if ret_value == WAIT_TIMEOUT:
-                raise TimeoutError
-        return self._handles[WAIT_OBJECT_0 - ret_value]
+        if type(ret_value) is tuple:
+            index, error, desc = ret_value
+            if type(error) is int:
+                raise WaitForMultipleObjectsError, (
+                    "Thread(%d): Failed %d: %s" % (ret_value)
+                )
+            else:
+                raise error, ('Thread(%d) %s' % (index, error))
+        try:
+            return self._handles[ret_value]
+        except:
+            import ipdb; ipdb.set_trace()
 
 

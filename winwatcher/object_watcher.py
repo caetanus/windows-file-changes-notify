@@ -4,8 +4,12 @@ from .win32_objects import (NOTIFY_CONSTANTS, FindNextChangeNotification,
                FindCloseChangeNotification, FindFirstChangeNotification,
                DirectoryWatcherError, WaitForMultipleObjectsPool,
                CreateFileDirectory, ReadDirectoryChangesW, OVERLAPPED,
-               ACTION_DICT, FILE_NOTIFY_INFORMATION_STRUCT, CloseHandle)
+               ACTION_DICT, FILE_NOTIFY_INFORMATION_STRUCT, CloseHandle,
+               GetOverlappedResult, IoCompletionPort, CreateEvent,
+               GetLastError, FormatError, FILE_ACTION_RENAMED_OLD_NAME,
+               FILE_ACTION_RENAMED_NEW_NAME)
 from ctypes import byref, create_string_buffer
+from ctypes.wintypes import DWORD
 import struct
 import os
 
@@ -47,10 +51,12 @@ class WinDirectoryWatcher(object):
         except KeyError:
             raise DirectoryWatcherError, "invalid notify_attributes_list"
 
+
         self._watching = False
         self.recursive = True
         self._stat = get_stat(path)
         self.path = path
+        self._queued_results = []
 
 
     def _async_watch_directory(self):
@@ -70,47 +76,72 @@ class WinDirectoryWatcher(object):
         self._handle = FindFirstChangeNotification(self.path, self._flags,
                                                   self.recursive)
 
-    def add_child(self, obj):
-        if not isinstance(obj, _WinFSObjectWatcher):
-            raise FSWatcherError("cannot add child with type(%s), "
-                                 "just accept objects of family "
-                                 "_WinFSOBjectWatcher" % type(obj))
-        self._children.append(obj)
-        obj._parent = self
-
     def start_watching(self):
         self._watching = True
         self._watch()
         self._file_handle = CreateFileDirectory(self.path)
+        #self._iocp = IoCompletionPort()
+        #self._iocp.attach_fsobject(self)
         self._overlapped = OVERLAPPED()
-        self._result = create_string_buffer(1024)
+        self._overlapped.hEvent = CreateEvent()
+        self._result = create_string_buffer(8192)
         self._async_watch_directory()
 
     def stop_watching(self):
         if self._file_handle:
             closed = CloseHandle(self._file_handle)
             self._file_handle = None
+
+        if hasattr(self, '_wfmo'):
+            self._watch._cancel_all_threads()
+            del self._wmfo
+
         if self._handle:
             closed = CloseHandle(self._handle)
             self._handle = None
-        if hasattr(self, '_wfmo'):
-            del self._wmfo
+
+        CloseHandle(self._overlapped.hEvent)
+
         self._overlapped = None
         self._result = None
         self._watching = False
+
+        if hasattr(self, '_iocp'):
+            self._iocp.destroy()
+            del self._iocp
+
 
     def _parse_read_directory_changes_result(self, location=0):
         fmt = FILE_NOTIFY_INFORMATION_STRUCT
         fmt_size = struct.calcsize(FILE_NOTIFY_INFORMATION_STRUCT)
         next_entry = 1
         pos = location
+        FindNextChangeNotification(self._handle)
+        bytes_read = DWORD()
+        old_overlapped = self._overlapped
+        #bytes_to_read = self._iocp.fsobject_get_status(self)
+
         while next_entry:
             next_entry, action, namelen = struct.unpack_from(fmt, self._result[pos:])
-            str_pos = location + fmt_size
+            str_pos = pos + fmt_size
             str_len = namelen + str_pos
             name = self._result[str_pos:str_len].decode('utf-16')
-            yield (ACTION_DICT[action], name)
             pos += next_entry
+            if action == FILE_ACTION_RENAMED_OLD_NAME:
+                renamed_old = name
+                continue
+            if action == FILE_ACTION_RENAMED_NEW_NAME:
+                yield ('Moved', renamed_old, name)
+                continue
+
+            yield (ACTION_DICT[action], name)
+
+        ret_value = GetOverlappedResult(self._handle, old_overlapped,
+                                        byref(bytes_read), True)
+        if not ret_value:
+            raise WinDirectoryWatcher, FormatError(GetLastError())
+
+        self._async_watch_directory()
 
     def _get_results(self):
         for action, name in self._parse_read_directory_changes_result():
@@ -121,15 +152,20 @@ class WinDirectoryWatcher(object):
         self._wmfo = FSObjectWatcherWMFOPool()
         self._wmfo.register(self)
 
-    def pool(self):
+    def pool(self, timeout=-1):
         if not self._watching:
             raise DirectoryWatcherError, "Not Watching"
 
         if not hasattr(self, '_wmfo'):
             self._auto_fetch_events()
 
-        self._wmfo.pool()
-        return [i for i in self._parse_read_directory_changes_result()]
+        if self._queued_results:
+            return self._queued_results.pop(0)
+
+        self._wmfo.pool(timeout)
+        self._queued_results = [i for i in
+                                self._parse_read_directory_changes_result()]
+        return self.pool(timeout)
 
 
 class FSObjectWatcherWMFOPool(WaitForMultipleObjectsPool):
@@ -152,4 +188,4 @@ class FSObjectWatcherWMFOPool(WaitForMultipleObjectsPool):
     def pool(self, timeout=-1):
         ret_val = WaitForMultipleObjectsPool.pool(self, timeout)
         obj = self._handle_fs_object_watcher[ret_val]
-        return obj
+        return (ret_val, obj)
