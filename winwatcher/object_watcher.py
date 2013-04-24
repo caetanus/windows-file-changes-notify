@@ -24,8 +24,6 @@ class FSFileWatcherError(DirectoryWatcherError):
 class InvalidWatchType(FSFileWatcherError):
     pass
 
-def get_stat(path):
-    return os.stat(path)
 
 default_notification_list = ('ChangeSize',
                              'LastWrite',
@@ -42,6 +40,10 @@ class WinDirectoryWatcher(object):
                 path = unicode(path)
             except:
                 raise IOError, "path should be unicode or convertable."
+
+        if not os.path.isdir(path):
+            raise InvalidWatchType, "the path should be a directory."
+
         if not os.path.exists(path):
             raise FSWatcherError, "path doesn't exist"
         try:
@@ -51,10 +53,8 @@ class WinDirectoryWatcher(object):
         except KeyError:
             raise DirectoryWatcherError, "invalid notify_attributes_list"
 
-
         self._watching = False
         self.recursive = True
-        self._stat = get_stat(path)
         self.path = path
         self._queued_results = []
 
@@ -119,7 +119,6 @@ class WinDirectoryWatcher(object):
         FindNextChangeNotification(self._handle)
         bytes_read = DWORD()
         old_overlapped = self._overlapped
-        #bytes_to_read = self._iocp.fsobject_get_status(self)
 
         while next_entry:
             next_entry, action, namelen = struct.unpack_from(fmt, self._result[pos:])
