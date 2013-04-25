@@ -142,11 +142,6 @@ class WinDirectoryWatcher(object):
 
         self._async_watch_directory()
 
-    def _get_results(self):
-        for action, name in self._parse_read_directory_changes_result():
-            import ipdb; ipdb.set_trace()
-            print action, name.encode('utf-8')
-
     def _auto_fetch_events(self):
         self._wmfo = FSObjectWatcherWMFOPool()
         self._wmfo.register(self)
