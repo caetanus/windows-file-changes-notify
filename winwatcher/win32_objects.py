@@ -224,6 +224,7 @@ class WaitForMultipleObjectsPool(object):
         try:
             return self._handles[ret_value]
         except:
-            import ipdb; ipdb.set_trace()
+            raise DirectoryWatcherError, "unhandled error, trying to get an event that doesn't exists, race condition?"
+
 
 
