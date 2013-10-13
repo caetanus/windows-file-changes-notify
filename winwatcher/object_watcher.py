@@ -100,7 +100,8 @@ class WinDirectoryWatcher(object):
             closed = CloseHandle(self._handle)
             self._handle = None
 
-        CloseHandle(self._overlapped.hEvent)
+        if self._overlapped:
+            CloseHandle(self._overlapped.hEvent)
 
         self._overlapped = None
         self._result = None
